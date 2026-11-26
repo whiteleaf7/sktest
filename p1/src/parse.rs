@@ -1,15 +1,3 @@
-//! Parses text written in the sysctl.conf format into a `HashMap`.
-//!
-//! Rules:
-//! - Lines that are empty or whitespace only are skipped.
-//! - Lines whose first non-whitespace character is `#` or `;` are comments.
-//! - Other lines are `key = value`. The line is split at the first `=`,
-//!   and the key and the value are trimmed.
-//! - A single leading `-` is removed from the key (`-a=1` sets `a`).
-//!   Only one is removed, so `--a=1` sets `-a`.
-//! - Quotes have no special meaning and are kept as they are.
-//! - When the same key appears more than once, the last one wins.
-
 use std::collections::HashMap;
 use std::fmt;
 
@@ -36,7 +24,7 @@ pub fn parse(input: &str) -> Result<HashMap<String, String>, ParseError> {
     let mut map = HashMap::new();
 
     for (index, raw) in input.lines().enumerate() {
-        let line_no = index + 1;
+        let line_number = index + 1;
         let line = raw.trim();
 
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
@@ -45,11 +33,14 @@ pub fn parse(input: &str) -> Result<HashMap<String, String>, ParseError> {
 
         let (key, value) = line
             .split_once('=')
-            .ok_or(ParseError::MissingEquals { line: line_no })?;
+            .ok_or(ParseError::MissingEquals { line: line_number })?;
 
+        // NOTE: parser として key の存在有無でエラーになる状況にはならないため、- は単純に正常な
+        // 場合のパターンとして適用する
+        // ex.) -a=1 -> { a: 1 }, --a=1 -> { "-a": 1 }
         let key = key.strip_prefix('-').unwrap_or(key).trim();
         if key.is_empty() {
-            return Err(ParseError::EmptyKey { line: line_no });
+            return Err(ParseError::EmptyKey { line: line_number });
         }
 
         map.insert(key.to_string(), value.trim().to_string());
