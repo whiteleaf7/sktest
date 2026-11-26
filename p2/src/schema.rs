@@ -118,7 +118,6 @@ impl<'de> Visitor<'de> for NodeVisitor {
         let mut table = BTreeMap::new();
         while let Some(key) = map.next_key::<Key>()? {
             // The toml crate passes a datetime as a map with this private key.
-            // The test `reports_errors` catches it if a new version changes this.
             if key.0 == "$__toml_private_datetime" {
                 return Err(de::Error::invalid_type(
                     Unexpected::Other("datetime"),

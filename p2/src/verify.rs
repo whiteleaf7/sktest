@@ -43,7 +43,7 @@ pub enum VerifyError {
 }
 
 impl VerifyError {
-    pub fn key(&self) -> &str {
+    fn key(&self) -> &str {
         match self {
             VerifyError::UnknownKey { key }
             | VerifyError::MissingKey { key, .. }
