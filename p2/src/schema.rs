@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::Deserialize;
-use serde::de::{self, Deserializer, MapAccess, Visitor};
+use serde::de::{self, Deserializer, MapAccess, Unexpected, Visitor};
 
 /// A value type that a key accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +108,16 @@ impl<'de> Visitor<'de> for NodeVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
         let mut table = BTreeMap::new();
-        while let Some((key, node)) = map.next_entry::<Key, Node>()? {
+        while let Some(key) = map.next_key::<Key>()? {
+            // The toml crate passes a datetime as a map with this private key.
+            // The test `reports_errors` catches it if a new version changes this.
+            if key.0 == "$__toml_private_datetime" {
+                return Err(de::Error::invalid_type(
+                    Unexpected::Other("datetime"),
+                    &self,
+                ));
+            }
+            let node = map.next_value::<Node>()?;
             table.insert(key, node);
         }
         // `parse` never produces an empty map, so an empty table can never match.
@@ -241,6 +250,8 @@ ip_forward = \"bool\"
             ("a = \"Bool\"", 1, 5, "unknown type \"Bool\""),
             ("ok = \"string\"\na = 1", 2, 5, "invalid type: integer `1`"),
             ("a = true", 1, 5, "invalid type: boolean `true`"),
+            ("a = 1979-05-27", 1, 5, "invalid type: datetime"),
+            ("a = 07:32:00", 1, 5, "invalid type: datetime"),
             ("a = [\"string\"]", 1, 5, "invalid type: sequence"),
             ("\"a.b\" = \"string\"", 1, 1, "key \"a.b\" contains '.'"),
             ("x.\"a.b\" = \"string\"", 1, 3, "key \"a.b\" contains '.'"),
