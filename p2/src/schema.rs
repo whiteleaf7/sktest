@@ -141,21 +141,26 @@ pub struct Schema {
     pub root: BTreeMap<Key, Node>,
 }
 
-/// The schema file is not valid. The message has the line and column of the problem.
+/// The schema file is not valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaError {
+    /// Where the problem is, when the toml crate tells it.
+    pub position: Option<Position>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
     pub line: usize,
     pub column: usize,
-    pub message: String,
 }
 
 impl fmt::Display for SchemaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "line {}, column {}: {}",
-            self.line, self.column, self.message
-        )
+        if let Some(Position { line, column }) = self.position {
+            write!(f, "line {line}, column {column}: ")?;
+        }
+        f.write_str(&self.message)
     }
 }
 
@@ -163,17 +168,19 @@ impl std::error::Error for SchemaError {}
 
 impl Schema {
     pub fn from_toml(input: &str) -> Result<Schema, SchemaError> {
-        toml::from_str(input).map_err(|e| {
-            let offset = e.span().map_or(0, |span| span.start);
-            let before = &input[..offset];
-            let line = before.matches('\n').count() + 1;
-            let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-            SchemaError {
-                line,
-                column,
-                message: e.message().trim().to_string(),
-            }
+        toml::from_str(input).map_err(|e| SchemaError {
+            position: e.span().map(|span| position(input, span.start)),
+            message: e.message().trim().to_string(),
         })
+    }
+}
+
+/// Turns a byte offset into a line and a column, both starting at 1.
+fn position(input: &str, offset: usize) -> Position {
+    let before = &input[..offset];
+    Position {
+        line: before.matches('\n').count() + 1,
+        column: before.rsplit('\n').next().unwrap_or("").chars().count() + 1,
     }
 }
 
@@ -273,8 +280,8 @@ ip_forward = \"bool\"
         for (input, line, column, message) in cases {
             let error = Schema::from_toml(input).expect_err(input);
             assert_eq!(
-                (error.line, error.column),
-                (line, column),
+                error.position,
+                Some(Position { line, column }),
                 "input: {input:?}, error: {error}"
             );
             assert!(
