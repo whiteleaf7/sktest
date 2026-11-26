@@ -1,12 +1,33 @@
 use std::collections::HashMap;
 use std::fmt;
 
+/// A parsed value. A key with `.` such as `log.file` becomes nested maps.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Value {
+    String(String),
+    Map(HashMap<String, Value>),
+}
+
+// Print the inner value only, so the output looks like plain nested maps.
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::String(s) => fmt::Debug::fmt(s, f),
+            Value::Map(m) => fmt::Debug::fmt(m, f),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     /// The line has no `=`.
     MissingEquals { line: usize },
     /// The key is empty after trimming and removing `-`.
     EmptyKey { line: usize },
+    /// A part of the key between `.` is empty, such as `a..b` or `a.`.
+    EmptyKeySegment { line: usize },
+    /// The key is used both as a value and as a parent, such as `a=1` and `a.b=2`.
+    KeyConflict { line: usize, key: String },
 }
 
 impl fmt::Display for ParseError {
@@ -14,13 +35,19 @@ impl fmt::Display for ParseError {
         match self {
             ParseError::MissingEquals { line } => write!(f, "line {line}: missing '='"),
             ParseError::EmptyKey { line } => write!(f, "line {line}: empty key"),
+            ParseError::EmptyKeySegment { line } => {
+                write!(f, "line {line}: empty part in key")
+            }
+            ParseError::KeyConflict { line, key } => {
+                write!(f, "line {line}: key '{key}' conflicts with an existing key")
+            }
         }
     }
 }
 
 impl std::error::Error for ParseError {}
 
-pub fn parse(input: &str) -> Result<HashMap<String, String>, ParseError> {
+pub fn parse(input: &str) -> Result<HashMap<String, Value>, ParseError> {
     let mut map = HashMap::new();
 
     for (index, raw) in input.lines().enumerate() {
@@ -43,176 +70,133 @@ pub fn parse(input: &str) -> Result<HashMap<String, String>, ParseError> {
             return Err(ParseError::EmptyKey { line: line_number });
         }
 
-        map.insert(key.to_string(), value.trim().to_string());
+        let segments: Vec<&str> = key.split('.').map(str::trim).collect();
+        if segments.iter().any(|s| s.is_empty()) {
+            return Err(ParseError::EmptyKeySegment { line: line_number });
+        }
+
+        insert(&mut map, &segments, value.trim().to_string()).map_err(|()| {
+            ParseError::KeyConflict {
+                line: line_number,
+                key: key.to_string(),
+            }
+        })?;
     }
 
     Ok(map)
+}
+
+/// Inserts `value` at the path `segments`, creating parent maps as needed.
+/// Returns `Err(())` when a parent is already a string, or the target is already a map.
+fn insert(map: &mut HashMap<String, Value>, segments: &[&str], value: String) -> Result<(), ()> {
+    let (last, parents) = segments.split_last().expect("segments is not empty");
+
+    let mut current = map;
+    for segment in parents {
+        let entry = current
+            .entry(segment.to_string())
+            .or_insert_with(|| Value::Map(HashMap::new()));
+        current = match entry {
+            Value::Map(child) => child,
+            Value::String(_) => return Err(()),
+        };
+    }
+
+    if let Some(Value::Map(_)) = current.get(*last) {
+        return Err(());
+    }
+    current.insert(last.to_string(), Value::String(value));
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    fn s(value: &str) -> Value {
+        Value::String(value.to_string())
+    }
+
+    fn m<const N: usize>(pairs: [(&str, Value); N]) -> HashMap<String, Value> {
+        pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }
 
     #[test]
-    fn empty_input() {
-        assert_eq!(parse(""), Ok(HashMap::new()));
+    fn parses_all_rules() {
+        let input = "\
+# comment
+; comment
+  # indented comment
+
+endpoint = localhost:3000
+  spaced  =  a  b  
+empty =
+quoted = \"x\"
+equals = a=b
+hash = 1 # not a comment
+-dash = 1
+--double = 1
+dup = 1
+dup = 2
+version = 1.2.3
+log.file = /var/log/console.log
+log . level = info
+-net.ipv4.ip_forward = 1
+キー = 値
+crlf = 1\r
+";
+
+        let expected = m([
+            ("endpoint", s("localhost:3000")),
+            ("spaced", s("a  b")),
+            ("empty", s("")),
+            ("quoted", s("\"x\"")),
+            ("equals", s("a=b")),
+            ("hash", s("1 # not a comment")),
+            ("dash", s("1")),
+            ("-double", s("1")),
+            ("dup", s("2")),
+            ("version", s("1.2.3")),
+            (
+                "log",
+                Value::Map(m([
+                    ("file", s("/var/log/console.log")),
+                    ("level", s("info")),
+                ])),
+            ),
+            (
+                "net",
+                Value::Map(m([("ipv4", Value::Map(m([("ip_forward", s("1"))])))])),
+            ),
+            ("キー", s("値")),
+            ("crlf", s("1")),
+        ]);
+
+        assert_eq!(parse(input), Ok(expected));
     }
 
     #[test]
-    fn simple_assignment() {
-        assert_eq!(parse("a=1"), Ok(map(&[("a", "1")])));
-    }
+    fn reports_errors() {
+        let conflict = |line, key: &str| ParseError::KeyConflict {
+            line,
+            key: key.to_string(),
+        };
+        let cases = [
+            ("a", ParseError::MissingEquals { line: 1 }),
+            (
+                "# comment\n\na=1\nbad",
+                ParseError::MissingEquals { line: 4 },
+            ),
+            ("=1", ParseError::EmptyKey { line: 1 }),
+            ("-=1", ParseError::EmptyKey { line: 1 }),
+            ("a..b=1", ParseError::EmptyKeySegment { line: 1 }),
+            ("a.=1", ParseError::EmptyKeySegment { line: 1 }),
+            ("a=1\na.b=2", conflict(2, "a.b")),
+            ("a.b=1\na=2", conflict(2, "a")),
+        ];
 
-    #[test]
-    fn multiple_assignments() {
-        let input = "a=1\nb=2\nnet.ipv4.ip_forward=1\n";
-        assert_eq!(
-            parse(input),
-            Ok(map(&[("a", "1"), ("b", "2"), ("net.ipv4.ip_forward", "1")]))
-        );
-    }
-
-    #[test]
-    fn trims_key_and_value() {
-        assert_eq!(parse("  a  =  1  "), Ok(map(&[("a", "1")])));
-        assert_eq!(parse("\ta\t=\t1\t"), Ok(map(&[("a", "1")])));
-    }
-
-    #[test]
-    fn keeps_inner_whitespace_of_value() {
-        assert_eq!(parse("a = 1  2\t3"), Ok(map(&[("a", "1  2\t3")])));
-    }
-
-    #[test]
-    fn splits_at_first_equals() {
-        assert_eq!(parse("a=b=c"), Ok(map(&[("a", "b=c")])));
-        assert_eq!(parse("a = = "), Ok(map(&[("a", "=")])));
-    }
-
-    #[test]
-    fn empty_value_is_allowed() {
-        assert_eq!(parse("a="), Ok(map(&[("a", "")])));
-        assert_eq!(parse("a =   "), Ok(map(&[("a", "")])));
-    }
-
-    #[test]
-    fn quotes_are_kept() {
-        assert_eq!(parse(r#"a="1""#), Ok(map(&[("a", r#""1""#)])));
-        assert_eq!(parse("a='x y'"), Ok(map(&[("a", "'x y'")])));
-    }
-
-    #[test]
-    fn skips_blank_lines() {
-        assert_eq!(parse("\n\n   \n\t\na=1\n\n"), Ok(map(&[("a", "1")])));
-    }
-
-    #[test]
-    fn skips_comments() {
-        let input = "# comment\n; comment\n  # indented\n\t; indented\na=1";
-        assert_eq!(parse(input), Ok(map(&[("a", "1")])));
-    }
-
-    #[test]
-    fn comment_line_may_contain_equals() {
-        assert_eq!(parse("# a=1\n; b=2"), Ok(HashMap::new()));
-    }
-
-    #[test]
-    fn hash_after_value_is_part_of_value() {
-        assert_eq!(parse("a=1 # note"), Ok(map(&[("a", "1 # note")])));
-        assert_eq!(parse("a=1;2"), Ok(map(&[("a", "1;2")])));
-    }
-
-    #[test]
-    fn removes_single_leading_dash() {
-        assert_eq!(parse("-a=1"), Ok(map(&[("a", "1")])));
-    }
-
-    #[test]
-    fn removes_only_one_dash() {
-        assert_eq!(parse("--a=1"), Ok(map(&[("-a", "1")])));
-        assert_eq!(parse("---a=1"), Ok(map(&[("--a", "1")])));
-    }
-
-    #[test]
-    fn dash_after_leading_whitespace() {
-        assert_eq!(parse("  -a=1"), Ok(map(&[("a", "1")])));
-    }
-
-    #[test]
-    fn whitespace_between_dash_and_key() {
-        assert_eq!(parse("- a=1"), Ok(map(&[("a", "1")])));
-    }
-
-    #[test]
-    fn dash_inside_key_is_kept() {
-        assert_eq!(parse("a-b=1"), Ok(map(&[("a-b", "1")])));
-        assert_eq!(parse("a-=1"), Ok(map(&[("a-", "1")])));
-    }
-
-    #[test]
-    fn dash_in_value_is_kept() {
-        assert_eq!(parse("a=-1"), Ok(map(&[("a", "-1")])));
-    }
-
-    #[test]
-    fn later_assignment_wins() {
-        assert_eq!(parse("a=1\na=2"), Ok(map(&[("a", "2")])));
-        assert_eq!(parse("a=1\n-a=2"), Ok(map(&[("a", "2")])));
-        assert_eq!(parse("-a=1\na=2"), Ok(map(&[("a", "2")])));
-    }
-
-    #[test]
-    fn dash_key_and_plain_key_are_different() {
-        assert_eq!(parse("a=1\n--a=2"), Ok(map(&[("a", "1"), ("-a", "2")])));
-    }
-
-    #[test]
-    fn handles_crlf() {
-        assert_eq!(parse("a=1\r\nb=2\r\n"), Ok(map(&[("a", "1"), ("b", "2")])));
-    }
-
-    #[test]
-    fn handles_unicode() {
-        assert_eq!(parse("キー = 値"), Ok(map(&[("キー", "値")])));
-    }
-
-    #[test]
-    fn error_missing_equals() {
-        assert_eq!(parse("a"), Err(ParseError::MissingEquals { line: 1 }));
-        assert_eq!(parse("-a"), Err(ParseError::MissingEquals { line: 1 }));
-    }
-
-    #[test]
-    fn error_empty_key() {
-        assert_eq!(parse("=1"), Err(ParseError::EmptyKey { line: 1 }));
-        assert_eq!(parse("  = 1"), Err(ParseError::EmptyKey { line: 1 }));
-        assert_eq!(parse("-=1"), Err(ParseError::EmptyKey { line: 1 }));
-        assert_eq!(parse("- =1"), Err(ParseError::EmptyKey { line: 1 }));
-    }
-
-    #[test]
-    fn error_reports_line_number() {
-        let input = "# comment\n\na=1\nbad\nc=3";
-        assert_eq!(parse(input), Err(ParseError::MissingEquals { line: 4 }));
-    }
-
-    #[test]
-    fn error_display() {
-        assert_eq!(
-            ParseError::MissingEquals { line: 3 }.to_string(),
-            "line 3: missing '='"
-        );
-        assert_eq!(
-            ParseError::EmptyKey { line: 5 }.to_string(),
-            "line 5: empty key"
-        );
+        for (input, expected) in cases {
+            assert_eq!(parse(input), Err(expected), "input: {input:?}");
+        }
     }
 }
