@@ -52,7 +52,7 @@ impl TryFrom<&str> for Field {
 }
 
 /// A key of the schema. It must be a key that `parse` can produce:
-/// not empty, no `.`, and no spaces around it.
+/// not empty, no `.`, `=` or line break, and no spaces around it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Key(pub String);
@@ -71,6 +71,10 @@ impl TryFrom<String> for Key {
         }
         if s.trim() != s {
             return Err(format!("key \"{s}\" has spaces around it"));
+        }
+        // `parse` splits a line at the first `=` and reads one line at a time.
+        if s.contains(['=', '\n']) {
+            return Err(format!("key {s:?} contains '=' or a line break"));
         }
         Ok(Key(s))
     }
@@ -241,6 +245,8 @@ ip_forward = \"bool\"
             ("\"a.b\" = \"string\"", 1, 1, "key \"a.b\" contains '.'"),
             ("x.\"a.b\" = \"string\"", 1, 3, "key \"a.b\" contains '.'"),
             ("\"\" = \"string\"", 1, 1, "empty key"),
+            ("\"a=b\" = \"string\"", 1, 1, "key \"a=b\" contains '='"),
+            ("\"a\\nb\" = \"string\"", 1, 1, "key \"a\\nb\" contains '='"),
             (
                 "\" a\" = \"string\"",
                 1,
