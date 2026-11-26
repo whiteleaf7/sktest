@@ -1,4 +1,5 @@
 mod parse;
+mod schema;
 
 use std::env;
 use std::fs;
