@@ -130,7 +130,7 @@ fn verify_table(
     }
 
     for (key, value) in map {
-        if !schema.keys().any(|k| k.0 == *key) {
+        if !schema.contains_key(key.as_str()) {
             unknown_leaves(value, &join(prefix, key), errors);
         }
     }

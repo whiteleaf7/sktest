@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -77,6 +78,13 @@ impl TryFrom<String> for Key {
             return Err(format!("key {s:?} contains '=' or a line break"));
         }
         Ok(Key(s))
+    }
+}
+
+// The derived `Ord` compares the inner `String`, so it agrees with `str` as `Borrow` requires.
+impl Borrow<str> for Key {
+    fn borrow(&self) -> &str {
+        &self.0
     }
 }
 
