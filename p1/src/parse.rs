@@ -141,6 +141,8 @@ dup = 2
 version = 1.2.3
 log.file = /var/log/console.log
 log . level = info
+log.rotate.size = 10
+log.rotate.count = 5
 -net.ipv4.ip_forward = 1
 キー = 値
 crlf = 1\r
@@ -162,6 +164,10 @@ crlf = 1\r
                 Value::Map(m([
                     ("file", s("/var/log/console.log")),
                     ("level", s("info")),
+                    (
+                        "rotate",
+                        Value::Map(m([("size", s("10")), ("count", s("5"))])),
+                    ),
                 ])),
             ),
             (
@@ -193,6 +199,8 @@ crlf = 1\r
             ("a.=1", ParseError::EmptyKeySegment { line: 1 }),
             ("a=1\na.b=2", conflict(2, "a.b")),
             ("a.b=1\na=2", conflict(2, "a")),
+            ("log.file=x\nlog.file.a=1", conflict(2, "log.file.a")),
+            ("log.file.a=1\nlog.file=x", conflict(2, "log.file")),
         ];
 
         for (input, expected) in cases {
