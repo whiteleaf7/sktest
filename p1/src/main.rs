@@ -26,11 +26,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut entries: Vec<_> = map.iter().collect();
-    entries.sort();
-    for (key, value) in entries {
-        println!("{key} = {value}");
-    }
+    println!("{map:#?}");
 
     ExitCode::SUCCESS
 }
