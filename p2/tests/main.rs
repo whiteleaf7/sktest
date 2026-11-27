@@ -74,15 +74,15 @@ fn reports_errors_with_the_path_to_fix() {
     let schema = TempFile::new("bad.toml", b"retry = \"integer\"\ndebug = \"bool\"\n");
     let output = run(&[file.path(), schema.path()]);
 
-    let f = file.path();
+    let file_path = file.path();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         format!(
-            "{f}: debug: missing required key (expected bool)\n\
-             {f}: retry: expected integer, got \"abc\"\n\
-             {f}: retyr: unknown key\n"
+            "{file_path}: debug: missing required key (expected bool)\n\
+             {file_path}: retry: expected integer, got \"abc\"\n\
+             {file_path}: retyr: unknown key\n"
         )
     );
 
@@ -90,13 +90,13 @@ fn reports_errors_with_the_path_to_fix() {
     let schema = TempFile::new("broken.toml", b"retry = \"intger\"\n");
     let output = run(&[file.path(), schema.path()]);
 
-    let s = schema.path();
+    let schema_path = schema.path();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         format!(
-            "{s}: line 1, column 9: unknown type \"intger\" \
+            "{schema_path}: line 1, column 9: unknown type \"intger\" \
              (expected string, bool or integer, optionally followed by '?')\n"
         )
     );
