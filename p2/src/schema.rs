@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer, MapAccess, Unexpected, Visitor};
@@ -30,10 +31,10 @@ pub struct Field {
     pub optional: bool,
 }
 
-impl TryFrom<&str> for Field {
-    type Error = String;
+impl FromStr for Field {
+    type Err = String;
 
-    fn try_from(s: &str) -> Result<Self, String> {
+    fn from_str(s: &str) -> Result<Self, String> {
         let (name, optional) = match s.strip_suffix('?') {
             Some(name) => (name, true),
             None => (s, false),
@@ -56,7 +57,13 @@ impl TryFrom<&str> for Field {
 /// not empty, no `.`, `=` or line break, and no spaces around it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(try_from = "String")]
-pub struct Key(pub String);
+pub struct Key(String);
+
+impl Key {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl TryFrom<String> for Key {
     type Error = String;
@@ -84,7 +91,7 @@ impl TryFrom<String> for Key {
 // The derived `Ord` compares the inner `String`, so it agrees with `str` as `Borrow` requires.
 impl Borrow<str> for Key {
     fn borrow(&self) -> &str {
-        &self.0
+        self.as_str()
     }
 }
 
@@ -111,14 +118,14 @@ impl<'de> Visitor<'de> for NodeVisitor {
     }
 
     fn visit_str<E: de::Error>(self, v: &str) -> Result<Node, E> {
-        Field::try_from(v).map(Node::Field).map_err(E::custom)
+        v.parse().map(Node::Field).map_err(E::custom)
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
         let mut table = BTreeMap::new();
         while let Some(key) = map.next_key::<Key>()? {
             // The toml crate passes a datetime as a map with this private key.
-            if key.0 == "$__toml_private_datetime" {
+            if key.as_str() == "$__toml_private_datetime" {
                 return Err(de::Error::invalid_type(
                     Unexpected::Other("datetime"),
                     &self,

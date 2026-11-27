@@ -11,6 +11,7 @@ pub enum Expected {
     Table,
 }
 
+// `MissingKey` prints a bare `Type` ("bool"), and only a mismatch lists the accepted values.
 impl fmt::Display for Expected {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -93,16 +94,9 @@ fn verify_table(
     errors: &mut Vec<VerifyError>,
 ) {
     for (key, node) in schema {
-        let path = join(prefix, &key.0);
-        match (node, map.get(&key.0)) {
-            (Node::Field(field), None) => {
-                if !field.optional {
-                    errors.push(VerifyError::MissingKey {
-                        key: path,
-                        expected: field.ty,
-                    });
-                }
-            }
+        let path = join(prefix, key.as_str());
+        match (node, map.get(key.as_str())) {
+            (node, None) => missing(node, path, errors),
             (Node::Field(field), Some(Value::String(s))) => {
                 if !accepts(field.ty, s) {
                     errors.push(VerifyError::TypeMismatch {
@@ -117,7 +111,6 @@ fn verify_table(
                 expected: Expected::Type(field.ty),
                 found: Found::Table,
             }),
-            (Node::Table(child), None) => missing_leaves(child, &path, errors),
             (Node::Table(child), Some(Value::Map(value))) => {
                 verify_table(value, child, &path, errors);
             }
@@ -136,17 +129,22 @@ fn verify_table(
     }
 }
 
-/// Reports every required key under a table that is not in the input at all.
-fn missing_leaves(schema: &BTreeMap<Key, Node>, prefix: &str, errors: &mut Vec<VerifyError>) {
-    for (key, node) in schema {
-        let path = join(prefix, &key.0);
-        match node {
-            Node::Field(field) if !field.optional => errors.push(VerifyError::MissingKey {
-                key: path,
-                expected: field.ty,
-            }),
-            Node::Field(_) => {}
-            Node::Table(child) => missing_leaves(child, &path, errors),
+/// Reports a key that is not in the input. For a table, reports every required key in it,
+/// so each error matches one line to add.
+fn missing(node: &Node, path: String, errors: &mut Vec<VerifyError>) {
+    match node {
+        Node::Field(field) => {
+            if !field.optional {
+                errors.push(VerifyError::MissingKey {
+                    key: path,
+                    expected: field.ty,
+                });
+            }
+        }
+        Node::Table(child) => {
+            for (key, node) in child {
+                missing(node, join(&path, key.as_str()), errors);
+            }
         }
     }
 }
