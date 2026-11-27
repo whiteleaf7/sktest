@@ -1,0 +1,12 @@
+# 要件の例をこの形式で書いたスキーマ
+endpoint = "string"
+debug = "bool"
+log.file = "string"
+retry = "integer"
+
+# 任意のキーとネストの例
+log.level = "string?"
+
+[db]
+host = "string"
+port = "integer?"
