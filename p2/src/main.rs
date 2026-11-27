@@ -33,18 +33,25 @@ fn main() -> ExitCode {
 }
 
 /// Parses the file and checks it against the schema.
-/// Each error is one line that starts with the path of the file to fix.
 fn run(path: &str, schema_path: &str) -> Result<HashMap<String, Value>, Vec<String>> {
-    let line = |path: &str, error: &dyn Display| format!("{path}: {error}");
+    let text = fs::read_to_string(path).map_err(at(path))?;
+    let map = parse::parse(&text).map_err(at(path))?;
 
-    let text = fs::read_to_string(path).map_err(|e| vec![line(path, &e)])?;
-    let map = parse::parse(&text).map_err(|e| vec![line(path, &e)])?;
-
-    let schema_text = fs::read_to_string(schema_path).map_err(|e| vec![line(schema_path, &e)])?;
-    let schema = Schema::from_toml(&schema_text).map_err(|e| vec![line(schema_path, &e)])?;
+    let schema_text = fs::read_to_string(schema_path).map_err(at(schema_path))?;
+    let schema = Schema::from_toml(&schema_text).map_err(at(schema_path))?;
 
     verify::verify(&map, &schema)
         .map_err(|errors| errors.iter().map(|e| line(path, e)).collect::<Vec<_>>())?;
 
     Ok(map)
+}
+
+/// One error line that starts with the path of the file to fix.
+fn line(path: &str, error: impl Display) -> String {
+    format!("{path}: {error}")
+}
+
+/// Turns a single error into the error lines of `run`, for use with `map_err`.
+fn at<E: Display>(path: &str) -> impl Fn(E) -> Vec<String> + '_ {
+    move |error| vec![line(path, error)]
 }
